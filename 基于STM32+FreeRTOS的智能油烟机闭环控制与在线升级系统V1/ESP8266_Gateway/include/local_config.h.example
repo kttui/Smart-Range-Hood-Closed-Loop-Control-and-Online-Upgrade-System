@@ -1,0 +1,15 @@
+#pragma once
+
+/* Copy to local_config.h. The real file is intentionally ignored. */
+#define OTA_WIFI_SSID       "your-wifi-ssid"
+#define OTA_WIFI_PASSWORD   "your-wifi-password"
+#define OTA_MANIFEST_URL    "https://firmware.example.com/stable/manifest.json"
+
+/* PEM certificate of the single CA that signs the HTTPS server certificate. */
+static const char OTA_ROOT_CA[] = R"EOF(
+-----BEGIN CERTIFICATE-----
+replace-with-server-root-or-intermediate-ca
+-----END CERTIFICATE-----
+)EOF";
+
+#define OTA_CONFIGURATION_READY 1

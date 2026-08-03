@@ -1,0 +1,358 @@
+#include "drv_lcd.h"
+#include "bsp_spi.h"
+#include "bsp_delay.h"
+#include "board_pins.h"
+#include "stm32f10x.h"
+
+#define LCD_CMD_SLEEP_OUT        0x11
+#define LCD_CMD_DISPLAY_ON       0x29
+#define LCD_CMD_MEMORY_ACCESS    0x36
+#define LCD_CMD_PIXEL_FORMAT     0x3A
+#define LCD_CMD_COLUMN_ADDR      0x2A
+#define LCD_CMD_ROW_ADDR         0x2B
+#define LCD_CMD_MEMORY_WRITE     0x2C
+
+#define LCD_X_OFFSET             2
+#define LCD_Y_OFFSET             3
+#define LCD_CHAR_WIDTH           6
+#define LCD_CHAR_HEIGHT          8
+
+/*
+ * 5x7 ASCII 字库，每个字符 5 列，每列低 7 位表示像素。
+ * DrawChar 会额外补 1 列空白，所以一个字符实际占用 6x8 像素。
+ * 这种字体体积小、绘制简单，适合 128x128 小屏显示状态信息。
+ */
+static const uint8_t s_font5x7[][5] = {
+    {0x00,0x00,0x00,0x00,0x00}, {0x00,0x00,0x5F,0x00,0x00}, {0x00,0x07,0x00,0x07,0x00}, {0x14,0x7F,0x14,0x7F,0x14},
+    {0x24,0x2A,0x7F,0x2A,0x12}, {0x23,0x13,0x08,0x64,0x62}, {0x36,0x49,0x55,0x22,0x50}, {0x00,0x05,0x03,0x00,0x00},
+    {0x00,0x1C,0x22,0x41,0x00}, {0x00,0x41,0x22,0x1C,0x00}, {0x14,0x08,0x3E,0x08,0x14}, {0x08,0x08,0x3E,0x08,0x08},
+    {0x00,0x50,0x30,0x00,0x00}, {0x08,0x08,0x08,0x08,0x08}, {0x00,0x60,0x60,0x00,0x00}, {0x20,0x10,0x08,0x04,0x02},
+    {0x3E,0x51,0x49,0x45,0x3E}, {0x00,0x42,0x7F,0x40,0x00}, {0x42,0x61,0x51,0x49,0x46}, {0x21,0x41,0x45,0x4B,0x31},
+    {0x18,0x14,0x12,0x7F,0x10}, {0x27,0x45,0x45,0x45,0x39}, {0x3C,0x4A,0x49,0x49,0x30}, {0x01,0x71,0x09,0x05,0x03},
+    {0x36,0x49,0x49,0x49,0x36}, {0x06,0x49,0x49,0x29,0x1E}, {0x00,0x36,0x36,0x00,0x00}, {0x00,0x56,0x36,0x00,0x00},
+    {0x08,0x14,0x22,0x41,0x00}, {0x14,0x14,0x14,0x14,0x14}, {0x00,0x41,0x22,0x14,0x08}, {0x02,0x01,0x51,0x09,0x06},
+    {0x32,0x49,0x79,0x41,0x3E}, {0x7E,0x11,0x11,0x11,0x7E}, {0x7F,0x49,0x49,0x49,0x36}, {0x3E,0x41,0x41,0x41,0x22},
+    {0x7F,0x41,0x41,0x22,0x1C}, {0x7F,0x49,0x49,0x49,0x41}, {0x7F,0x09,0x09,0x09,0x01}, {0x3E,0x41,0x49,0x49,0x7A},
+    {0x7F,0x08,0x08,0x08,0x7F}, {0x00,0x41,0x7F,0x41,0x00}, {0x20,0x40,0x41,0x3F,0x01}, {0x7F,0x08,0x14,0x22,0x41},
+    {0x7F,0x40,0x40,0x40,0x40}, {0x7F,0x02,0x0C,0x02,0x7F}, {0x7F,0x04,0x08,0x10,0x7F}, {0x3E,0x41,0x41,0x41,0x3E},
+    {0x7F,0x09,0x09,0x09,0x06}, {0x3E,0x41,0x51,0x21,0x5E}, {0x7F,0x09,0x19,0x29,0x46}, {0x46,0x49,0x49,0x49,0x31},
+    {0x01,0x01,0x7F,0x01,0x01}, {0x3F,0x40,0x40,0x40,0x3F}, {0x1F,0x20,0x40,0x20,0x1F}, {0x3F,0x40,0x38,0x40,0x3F},
+    {0x63,0x14,0x08,0x14,0x63}, {0x07,0x08,0x70,0x08,0x07}, {0x61,0x51,0x49,0x45,0x43}, {0x00,0x7F,0x41,0x41,0x00},
+    {0x02,0x04,0x08,0x10,0x20}, {0x00,0x41,0x41,0x7F,0x00}, {0x04,0x02,0x01,0x02,0x04}, {0x40,0x40,0x40,0x40,0x40},
+    {0x00,0x01,0x02,0x04,0x00}, {0x20,0x54,0x54,0x54,0x78}, {0x7F,0x48,0x44,0x44,0x38}, {0x38,0x44,0x44,0x44,0x20},
+    {0x38,0x44,0x44,0x48,0x7F}, {0x38,0x54,0x54,0x54,0x18}, {0x08,0x7E,0x09,0x01,0x02}, {0x0C,0x52,0x52,0x52,0x3E},
+    {0x7F,0x08,0x04,0x04,0x78}, {0x00,0x44,0x7D,0x40,0x00}, {0x20,0x40,0x44,0x3D,0x00}, {0x7F,0x10,0x28,0x44,0x00},
+    {0x00,0x41,0x7F,0x40,0x00}, {0x7C,0x04,0x18,0x04,0x78}, {0x7C,0x08,0x04,0x04,0x78}, {0x38,0x44,0x44,0x44,0x38},
+    {0x7C,0x14,0x14,0x14,0x08}, {0x08,0x14,0x14,0x18,0x7C}, {0x7C,0x08,0x04,0x04,0x08}, {0x48,0x54,0x54,0x54,0x20},
+    {0x04,0x3F,0x44,0x40,0x20}, {0x3C,0x40,0x40,0x20,0x7C}, {0x1C,0x20,0x40,0x20,0x1C}, {0x3C,0x40,0x30,0x40,0x3C},
+    {0x44,0x28,0x10,0x28,0x44}, {0x0C,0x50,0x50,0x50,0x3C}, {0x44,0x64,0x54,0x4C,0x44}, {0x00,0x08,0x36,0x41,0x00},
+    {0x00,0x00,0x7F,0x00,0x00}, {0x00,0x41,0x36,0x08,0x00}, {0x08,0x08,0x2A,0x1C,0x08}, {0x08,0x1C,0x2A,0x08,0x08}
+};
+
+static void Drv_Lcd_CsHigh(void)
+{
+    GPIO_SetBits(LCD_CS_PORT, LCD_CS_PIN);
+}
+
+static void Drv_Lcd_CsLow(void)
+{
+    GPIO_ResetBits(LCD_CS_PORT, LCD_CS_PIN);
+}
+
+static void Drv_Lcd_DcHigh(void)
+{
+    GPIO_SetBits(LCD_DC_PORT, LCD_DC_PIN);
+}
+
+static void Drv_Lcd_DcLow(void)
+{
+    GPIO_ResetBits(LCD_DC_PORT, LCD_DC_PIN);
+}
+
+static void Drv_Lcd_RstHigh(void)
+{
+    GPIO_SetBits(LCD_RST_PORT, LCD_RST_PIN);
+}
+
+static void Drv_Lcd_RstLow(void)
+{
+    GPIO_ResetBits(LCD_RST_PORT, LCD_RST_PIN);
+}
+
+static void Drv_Lcd_WriteCommand(uint8_t command)
+{
+    Drv_Lcd_CsLow();
+    Drv_Lcd_DcLow();
+    BSP_SPI_LCD_WriteByte(command);
+    Drv_Lcd_CsHigh();
+}
+
+static void Drv_Lcd_WriteData8(uint8_t data)
+{
+    Drv_Lcd_CsLow();
+    Drv_Lcd_DcHigh();
+    BSP_SPI_LCD_WriteByte(data);
+    Drv_Lcd_CsHigh();
+}
+
+static void Drv_Lcd_WriteData16(uint16_t data)
+{
+    Drv_Lcd_CsLow();
+    Drv_Lcd_DcHigh();
+    BSP_SPI_LCD_WriteByte((uint8_t)(data >> 8));
+    BSP_SPI_LCD_WriteByte((uint8_t)data);
+    Drv_Lcd_CsHigh();
+}
+
+static void Drv_Lcd_WriteCommandData(uint8_t command, uint8_t data)
+{
+    Drv_Lcd_WriteCommand(command);
+    Drv_Lcd_WriteData8(data);
+}
+
+static void Drv_Lcd_SetWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1)
+{
+    /*
+     * ST7735 先设置列地址，再设置行地址，最后发 Memory Write。
+     * 这里加 offset 是为了匹配你商家例程中 128x128 屏的显示偏移。
+     */
+    x0 += LCD_X_OFFSET;
+    x1 += LCD_X_OFFSET;
+    y0 += LCD_Y_OFFSET;
+    y1 += LCD_Y_OFFSET;
+
+    Drv_Lcd_WriteCommand(LCD_CMD_COLUMN_ADDR);
+    Drv_Lcd_WriteData8(0x00);
+    Drv_Lcd_WriteData8((uint8_t)x0);
+    Drv_Lcd_WriteData8(0x00);
+    Drv_Lcd_WriteData8((uint8_t)x1);
+
+    Drv_Lcd_WriteCommand(LCD_CMD_ROW_ADDR);
+    Drv_Lcd_WriteData8(0x00);
+    Drv_Lcd_WriteData8((uint8_t)y0);
+    Drv_Lcd_WriteData8(0x00);
+    Drv_Lcd_WriteData8((uint8_t)y1);
+
+    Drv_Lcd_WriteCommand(LCD_CMD_MEMORY_WRITE);
+}
+
+static void Drv_Lcd_GPIOInit(void)
+{
+    GPIO_InitTypeDef gpio;
+
+    /*
+     * 控制线由 LCD 驱动层管理：
+     * CS  决定当前是否选中 LCD；
+     * DC  决定后续字节是命令还是显存数据；
+     * RST 用于硬件复位。
+     * 背光已经在硬件上直接接 3.3V，所以这里不配置背光 GPIO。
+     */
+    RCC_APB2PeriphClockCmd(LCD_CS_GPIO_CLK |
+                           LCD_DC_GPIO_CLK |
+                           LCD_RST_GPIO_CLK,
+                           ENABLE);
+
+    gpio.GPIO_Speed = GPIO_Speed_50MHz;
+    gpio.GPIO_Mode = GPIO_Mode_Out_PP;
+
+    gpio.GPIO_Pin = LCD_CS_PIN | LCD_DC_PIN;
+    GPIO_Init(LCD_CS_PORT, &gpio);
+
+    gpio.GPIO_Pin = LCD_RST_PIN;
+    GPIO_Init(LCD_RST_PORT, &gpio);
+
+    Drv_Lcd_CsHigh();
+    Drv_Lcd_DcHigh();
+    Drv_Lcd_RstHigh();
+}
+
+static void Drv_Lcd_Reset(void)
+{
+    Drv_Lcd_RstLow();
+    delay_ms(100);
+    Drv_Lcd_RstHigh();
+    delay_ms(50);
+}
+
+void Drv_Lcd_Init(void)
+{
+    /*
+     * 初始化顺序必须是：
+     * 1. GPIO 和软件 SPI 准备好；
+     * 2. 硬件复位；
+     * 3. 按 ST7735 初始化序列写寄存器；
+     * 4. 打开显示并清屏。
+     */
+    BSP_SPI_LCD_Init();
+    Drv_Lcd_GPIOInit();
+    Drv_Lcd_Reset();
+
+    Drv_Lcd_WriteCommand(LCD_CMD_SLEEP_OUT);
+    delay_ms(120);
+
+    Drv_Lcd_WriteCommand(0xB1);
+    Drv_Lcd_WriteData8(0x01);
+    Drv_Lcd_WriteData8(0x2C);
+    Drv_Lcd_WriteData8(0x2D);
+
+    Drv_Lcd_WriteCommand(0xB2);
+    Drv_Lcd_WriteData8(0x01);
+    Drv_Lcd_WriteData8(0x2C);
+    Drv_Lcd_WriteData8(0x2D);
+
+    Drv_Lcd_WriteCommand(0xB3);
+    Drv_Lcd_WriteData8(0x01);
+    Drv_Lcd_WriteData8(0x2C);
+    Drv_Lcd_WriteData8(0x2D);
+    Drv_Lcd_WriteData8(0x01);
+    Drv_Lcd_WriteData8(0x2C);
+    Drv_Lcd_WriteData8(0x2D);
+
+    Drv_Lcd_WriteCommandData(0xB4, 0x07);
+    Drv_Lcd_WriteCommand(0xC0);
+    Drv_Lcd_WriteData8(0xA2);
+    Drv_Lcd_WriteData8(0x02);
+    Drv_Lcd_WriteData8(0x84);
+    Drv_Lcd_WriteCommandData(0xC1, 0xC5);
+    Drv_Lcd_WriteCommand(0xC2);
+    Drv_Lcd_WriteData8(0x0A);
+    Drv_Lcd_WriteData8(0x00);
+    Drv_Lcd_WriteCommand(0xC3);
+    Drv_Lcd_WriteData8(0x8A);
+    Drv_Lcd_WriteData8(0x2A);
+    Drv_Lcd_WriteCommand(0xC4);
+    Drv_Lcd_WriteData8(0x8A);
+    Drv_Lcd_WriteData8(0xEE);
+    Drv_Lcd_WriteCommandData(0xC5, 0x0E);
+
+    Drv_Lcd_WriteCommandData(LCD_CMD_MEMORY_ACCESS, 0xC8);
+
+    Drv_Lcd_WriteCommand(0xE0);
+    Drv_Lcd_WriteData8(0x0F); Drv_Lcd_WriteData8(0x1A); Drv_Lcd_WriteData8(0x0F); Drv_Lcd_WriteData8(0x18);
+    Drv_Lcd_WriteData8(0x2F); Drv_Lcd_WriteData8(0x28); Drv_Lcd_WriteData8(0x20); Drv_Lcd_WriteData8(0x22);
+    Drv_Lcd_WriteData8(0x1F); Drv_Lcd_WriteData8(0x1B); Drv_Lcd_WriteData8(0x23); Drv_Lcd_WriteData8(0x37);
+    Drv_Lcd_WriteData8(0x00); Drv_Lcd_WriteData8(0x07); Drv_Lcd_WriteData8(0x02); Drv_Lcd_WriteData8(0x10);
+
+    Drv_Lcd_WriteCommand(0xE1);
+    Drv_Lcd_WriteData8(0x0F); Drv_Lcd_WriteData8(0x1B); Drv_Lcd_WriteData8(0x0F); Drv_Lcd_WriteData8(0x17);
+    Drv_Lcd_WriteData8(0x33); Drv_Lcd_WriteData8(0x2C); Drv_Lcd_WriteData8(0x29); Drv_Lcd_WriteData8(0x2E);
+    Drv_Lcd_WriteData8(0x30); Drv_Lcd_WriteData8(0x30); Drv_Lcd_WriteData8(0x39); Drv_Lcd_WriteData8(0x3F);
+    Drv_Lcd_WriteData8(0x00); Drv_Lcd_WriteData8(0x07); Drv_Lcd_WriteData8(0x03); Drv_Lcd_WriteData8(0x10);
+
+    Drv_Lcd_WriteCommand(LCD_CMD_COLUMN_ADDR);
+    Drv_Lcd_WriteData8(0x00); Drv_Lcd_WriteData8(0x00); Drv_Lcd_WriteData8(0x00); Drv_Lcd_WriteData8(0x7F);
+    Drv_Lcd_WriteCommand(LCD_CMD_ROW_ADDR);
+    Drv_Lcd_WriteData8(0x00); Drv_Lcd_WriteData8(0x00); Drv_Lcd_WriteData8(0x00); Drv_Lcd_WriteData8(0x9F);
+
+    Drv_Lcd_WriteCommandData(0xF0, 0x01);
+    Drv_Lcd_WriteCommandData(0xF6, 0x00);
+    Drv_Lcd_WriteCommandData(LCD_CMD_PIXEL_FORMAT, 0x05);
+    Drv_Lcd_WriteCommand(LCD_CMD_DISPLAY_ON);
+
+    Drv_Lcd_Clear(LCD_COLOR_BLACK);
+}
+
+void Drv_Lcd_Clear(uint16_t color)
+{
+    Drv_Lcd_FillRect(0, 0, LCD_DRV_WIDTH, LCD_DRV_HEIGHT, color);
+}
+
+void Drv_Lcd_DrawPixel(uint16_t x, uint16_t y, uint16_t color)
+{
+    if (x >= LCD_DRV_WIDTH || y >= LCD_DRV_HEIGHT)
+    {
+        return;
+    }
+
+    Drv_Lcd_SetWindow(x, y, x, y);
+    Drv_Lcd_WriteData16(color);
+}
+
+void Drv_Lcd_FillRect(uint16_t x, uint16_t y, uint16_t width, uint16_t height, uint16_t color)
+{
+    uint32_t pixels;
+    uint32_t i;
+
+    if (x >= LCD_DRV_WIDTH || y >= LCD_DRV_HEIGHT || width == 0 || height == 0)
+    {
+        return;
+    }
+
+    if ((x + width) > LCD_DRV_WIDTH)
+    {
+        width = LCD_DRV_WIDTH - x;
+    }
+
+    if ((y + height) > LCD_DRV_HEIGHT)
+    {
+        height = LCD_DRV_HEIGHT - y;
+    }
+
+    pixels = (uint32_t)width * (uint32_t)height;
+    Drv_Lcd_SetWindow(x, y, (uint16_t)(x + width - 1), (uint16_t)(y + height - 1));
+
+    Drv_Lcd_CsLow();
+    Drv_Lcd_DcHigh();
+    for (i = 0; i < pixels; i++)
+    {
+        BSP_SPI_LCD_WriteByte((uint8_t)(color >> 8));
+        BSP_SPI_LCD_WriteByte((uint8_t)color);
+    }
+    Drv_Lcd_CsHigh();
+}
+
+void Drv_Lcd_DrawChar(uint16_t x, uint16_t y, char ch, uint16_t color, uint16_t bg_color)
+{
+    uint8_t col;
+    uint8_t row;
+    uint8_t line;
+    uint8_t font_index;
+
+    if (x >= LCD_DRV_WIDTH || y >= LCD_DRV_HEIGHT)
+    {
+        return;
+    }
+
+    if (ch < ' ' || ch > '~')
+    {
+        ch = '?';
+    }
+
+    font_index = (uint8_t)(ch - ' ');
+
+    /*
+     * 逐像素绘制虽然不是最快，但代码简单、占用小。
+     * 128x128 状态界面刷新频率低，这种方式足够稳定。
+     */
+    for (col = 0; col < LCD_CHAR_WIDTH; col++)
+    {
+        line = (col < 5) ? s_font5x7[font_index][col] : 0x00;
+
+        for (row = 0; row < LCD_CHAR_HEIGHT; row++)
+        {
+            if ((line & (1u << row)) != 0u)
+            {
+                Drv_Lcd_DrawPixel((uint16_t)(x + col), (uint16_t)(y + row), color);
+            }
+            else
+            {
+                Drv_Lcd_DrawPixel((uint16_t)(x + col), (uint16_t)(y + row), bg_color);
+            }
+        }
+    }
+}
+
+void Drv_Lcd_DrawString(uint16_t x, uint16_t y, const char *str, uint16_t color, uint16_t bg_color)
+{
+    while (str != 0 && *str != '\0')
+    {
+        if ((x + LCD_CHAR_WIDTH) > LCD_DRV_WIDTH)
+        {
+            break;
+        }
+
+        Drv_Lcd_DrawChar(x, y, *str, color, bg_color);
+        x = (uint16_t)(x + LCD_CHAR_WIDTH);
+        str++;
+    }
+}

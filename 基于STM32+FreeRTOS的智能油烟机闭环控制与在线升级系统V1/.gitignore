@@ -1,0 +1,8 @@
+# Local OTA credentials and private signing keys
+ESP8266_Gateway/include/local_config.h
+Release/private_key.pem
+
+# Generated output
+Release/firmware/
+ESP8266_Gateway/.pio/
+Bootloader/Objects/

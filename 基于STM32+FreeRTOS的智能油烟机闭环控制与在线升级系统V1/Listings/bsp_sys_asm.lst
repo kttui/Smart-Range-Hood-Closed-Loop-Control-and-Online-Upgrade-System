@@ -1,0 +1,56 @@
+
+
+
+ARM Macro Assembler    Page 1 
+
+
+    1 00000000         ; bsp_sys_asm.s
+    2 00000000         ;
+    3 00000000         ; ARMCC/armasm standalone assembly helpers.
+    4 00000000         ; Keil MDK 5.39 may fail when old __asm functions are em
+                       bedded in C files
+    5 00000000         ; because armcc passes an unsupported --vfemode=force op
+                       tion to armasm.
+    6 00000000         ; Keeping these helpers in a real .s file avoids that to
+                       olchain path.
+    7 00000000         
+    8 00000000                 AREA             |.text|, CODE, READONLY
+    9 00000000                 THUMB
+   10 00000000                 PRESERVE8
+   11 00000000         
+   12 00000000                 EXPORT           MSR_MSP
+   13 00000000         
+   14 00000000         MSR_MSP
+   15 00000000 F380 8808       MSR              MSP, r0
+   16 00000004 4770            BX               lr
+   17 00000006         
+   18 00000006                 END
+Command Line: --debug --xref --diag_suppress=9931 --cpu=Cortex-M3 --apcs=interw
+ork --depend=.\objects\bsp_sys_asm.d -o.\objects\bsp_sys_asm.o -ID:\MCU\keil5\A
+RM\PACK\Keil\STM32F1xx_DFP\2.4.1\Device\Include --predefine="__UVISION_VERSION 
+SETA 539" --predefine="STM32F10X_HD SETA 1" --list=.\listings\bsp_sys_asm.lst B
+SP\bsp_sys_asm.s
+
+
+
+ARM Macro Assembler    Page 1 Alphabetic symbol ordering
+Relocatable symbols
+
+.text 00000000
+
+Symbol: .text
+   Definitions
+      At line 8 in file BSP\bsp_sys_asm.s
+   Uses
+      None
+Comment: .text unused
+MSR_MSP 00000000
+
+Symbol: MSR_MSP
+   Definitions
+      At line 14 in file BSP\bsp_sys_asm.s
+   Uses
+      At line 12 in file BSP\bsp_sys_asm.s
+Comment: MSR_MSP used once
+2 symbols
+334 symbols in table
