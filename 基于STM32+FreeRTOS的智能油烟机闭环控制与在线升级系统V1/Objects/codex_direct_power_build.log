@@ -1,9 +1,0 @@
-*** Using Compiler 'V5.06 update 5 (build 528)', folder: 'D:\Keil_v5\ARM\ARMCC\Bin'
-Build target 'Target 1'
-compiling main.c...
-linking...
-Program Size: Code=32756 RO-data=1780 RW-data=444 ZI-data=24284  
-FromELF: creating hex file...
-After Build - User command #1: fromelf.exe --bin --output .\Objects\Project.bin .\Objects\Project.axf
-".\Objects\Project.axf" - 0 Error(s), 0 Warning(s).
-Build Time Elapsed:  00:00:03
